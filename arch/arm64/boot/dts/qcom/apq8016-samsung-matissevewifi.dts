@@ -122,40 +122,6 @@
 		etm@85d000 { status = "disabled"; };
 		etm@85e000 { status = "disabled"; };
 		etm@85f000 { status = "disabled"; };
-
-		reg_lcd: regulator-lcd {
-			compatible = "regulator-fixed";
-			regulator-name = "lcd";
-			regulator-min-microvolt = <1800000>;
-			regulator-max-microvolt = <1800000>;
-
-			/* FIXME: find why we have to force regulator on */
-			regulator-always-on;
-			regulator-boot-on;
-
-			gpio = <&msmgpio 8 0>;
-			enable-active-high;
-
-			pinctrl-names = "default";
-			pinctrl-0 = <&lcd_en_default>;
-		};
-
-		reg_lvds: regulator-lvds {
-			compatible = "regulator-fixed";
-			regulator-name = "lvds";
-			regulator-min-microvolt = <3300000>;
-			regulator-max-microvolt = <3300000>;
-
-			/* FIXME: see above */
-			regulator-always-on;
-			regulator-boot-on;
-
-			gpio = <&msmgpio 17 0>;
-			enable-active-high;
-
-			pinctrl-names = "default";
-			pinctrl-0 = <&lvds_en_default>;
-		};
 	};
 
 	gpio-keys {
@@ -177,6 +143,40 @@
 			gpios = <&msmgpio 109 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_HOMEPAGE>;
 		};
+	};
+
+	reg_lcd: regulator-lcd {
+		compatible = "regulator-fixed";
+		regulator-name = "lcd";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+
+		/* FIXME: find why we have to force regulator on */
+		regulator-always-on;
+		regulator-boot-on;
+
+		gpio = <&msmgpio 8 0>;
+		enable-active-high;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&lcd_en_default>;
+	};
+
+	reg_lvds: regulator-lvds {
+		compatible = "regulator-fixed";
+		regulator-name = "lvds";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+
+		/* FIXME: see above */
+		regulator-always-on;
+		regulator-boot-on;
+
+		gpio = <&msmgpio 17 0>;
+		enable-active-high;
+
+		pinctrl-names = "default";
+		pinctrl-0 = <&lvds_en_default>;
 	};
 };
 
