@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 // Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
-// Copyright (c) 2017-19 Linaro Limited.
+// Copyright (c) 2017-20 Linaro Limited.
 
 #include <linux/clk.h>
 #include <linux/completion.h>
@@ -60,6 +60,10 @@
 #define CCI_IRQ_STATUS_0_RST_DONE_ACK		BIT(24)
 #define CCI_IRQ_STATUS_0_I2C_M0_Q0Q1_HALT_ACK	BIT(25)
 #define CCI_IRQ_STATUS_0_I2C_M1_Q0Q1_HALT_ACK	BIT(26)
+#define CCI_IRQ_STATUS_0_I2C_M0_Q0_NACK_ERR	BIT(27)
+#define CCI_IRQ_STATUS_0_I2C_M0_Q1_NACK_ERR	BIT(28)
+#define CCI_IRQ_STATUS_0_I2C_M1_Q0_NACK_ERR	BIT(29)
+#define CCI_IRQ_STATUS_0_I2C_M1_Q1_NACK_ERR	BIT(30)
 #define CCI_IRQ_STATUS_0_I2C_M0_ERROR		0x18000ee6
 #define CCI_IRQ_STATUS_0_I2C_M1_ERROR		0x60ee6000
 
@@ -69,7 +73,6 @@
 
 /* Max number of resources + 1 for a NULL terminator */
 #define CCI_RES_MAX	6
-
 
 #define CCI_I2C_SET_PARAM	1
 #define CCI_I2C_REPORT		8
@@ -178,15 +181,23 @@ static irqreturn_t cci_isr(int irq, void *dev)
 		writel(reset, cci->base + CCI_RESET_CMD);
 
 	if (unlikely(val & CCI_IRQ_STATUS_0_I2C_M0_ERROR)) {
-		dev_err_ratelimited(cci->dev, "Master 0 error 0x%08x\n", val);
-		cci->master[0].status = -EIO;
+		if (val & CCI_IRQ_STATUS_0_I2C_M0_Q0_NACK_ERR ||
+			val & CCI_IRQ_STATUS_0_I2C_M0_Q1_NACK_ERR)
+			cci->master[0].status = -ENXIO;
+		else
+			cci->master[0].status = -EIO;
+
 		writel(CCI_HALT_REQ_I2C_M0_Q0Q1, cci->base + CCI_HALT_REQ);
 		ret = IRQ_HANDLED;
 	}
 
 	if (unlikely(val & CCI_IRQ_STATUS_0_I2C_M1_ERROR)) {
-		dev_err_ratelimited(cci->dev, "Master 1 error 0x%08x\n", val);
-		cci->master[1].status = -EIO;
+		if (val & CCI_IRQ_STATUS_0_I2C_M1_Q0_NACK_ERR ||
+			val & CCI_IRQ_STATUS_0_I2C_M1_Q1_NACK_ERR)
+			cci->master[0].status = -ENXIO;
+		else
+			cci->master[0].status = -EIO;
+
 		writel(CCI_HALT_REQ_I2C_M1_Q0Q1, cci->base + CCI_HALT_REQ);
 		ret = IRQ_HANDLED;
 	}
@@ -199,7 +210,7 @@ static int cci_halt(struct cci *cci, u8 master_num)
 	struct cci_master *master;
 	u32 val;
 
-	if (master_num > 1) {
+	if (master_num >= cci->data->num_masters) {
 		dev_err(cci->dev, "Unsupported master idx (%u)\n", master_num);
 		return -EINVAL;
 	}
@@ -236,7 +247,7 @@ static int cci_reset(struct cci *cci)
 	return 0;
 }
 
-static int cci_init(struct cci *cci, const struct hw_params *hw)
+static int cci_init(struct cci *cci)
 {
 	u32 val = CCI_IRQ_MASK_0_I2C_M0_RD_DONE |
 			CCI_IRQ_MASK_0_I2C_M0_Q0_REPORT |
@@ -254,6 +265,14 @@ static int cci_init(struct cci *cci, const struct hw_params *hw)
 	writel(val, cci->base + CCI_IRQ_MASK_0);
 
 	for (i = 0; i < cci->data->num_masters; i++) {
+		int mode = cci->master[i].mode;
+		const struct hw_params *hw;
+
+		if (!cci->master[i].cci)
+			continue;
+
+		hw = &cci->data->params[mode];
+
 		val = hw->thigh << 16 | hw->tlow;
 		writel(val, cci->base + CCI_I2C_Mm_SCL_CTL(i));
 
@@ -276,7 +295,6 @@ static int cci_init(struct cci *cci, const struct hw_params *hw)
 static int cci_run_queue(struct cci *cci, u8 master, u8 queue)
 {
 	u32 val;
-	int ret;
 
 	val = readl(cci->base + CCI_I2C_Mm_Qn_CUR_WORD_CNT(master, queue));
 	writel(val, cci->base + CCI_I2C_Mm_Qn_EXEC_WORD_CNT(master, queue));
@@ -289,18 +307,12 @@ static int cci_run_queue(struct cci *cci, u8 master, u8 queue)
 					 CCI_TIMEOUT)) {
 		dev_err(cci->dev, "master %d queue %d timeout\n",
 			master, queue);
-
 		cci_reset(cci);
-		cci_init(cci, &cci->data->params[cci->master[master].mode]);
+		cci_init(cci);
 		return -ETIMEDOUT;
 	}
 
-	ret = cci->master[master].status;
-	if (ret < 0)
-		dev_err(cci->dev, "master %d queue %d error %d\n",
-			master, queue, ret);
-
-	return ret;
+	return cci->master[master].status;
 }
 
 static int cci_validate_queue(struct cci *cci, u8 master, u8 queue)
@@ -359,6 +371,10 @@ static int cci_i2c_read(struct cci *cci, u16 master,
 
 		for (i = 0; i < 4 && index < len; i++) {
 			if (first) {
+				/* The LS byte of this register represents the
+				 * first byte read from the slave during a read
+				 * access.
+				 */
 				first = false;
 				continue;
 			}
@@ -427,10 +443,8 @@ static int cci_xfer(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 					    msgs[i].addr, msgs[i].buf,
 					    msgs[i].len);
 
-		if (ret < 0) {
-			dev_err(cci->dev, "cci i2c xfer error %d", ret);
+		if (ret < 0)
 			break;
-		}
 	}
 
 	if (!ret)
@@ -445,7 +459,7 @@ err:
 
 static u32 cci_func(struct i2c_adapter *adap)
 {
-	return I2C_FUNC_I2C;
+	return I2C_FUNC_I2C | I2C_FUNC_SMBUS_EMUL;
 }
 
 static const struct i2c_algorithm cci_algo = {
@@ -455,13 +469,7 @@ static const struct i2c_algorithm cci_algo = {
 
 static int cci_enable_clocks(struct cci *cci)
 {
-	int ret;
-
-	ret = clk_bulk_prepare_enable(cci->nclocks, cci->clocks);
-	if (ret < 0)
-		dev_err(cci->dev, "Bulk clock prepare failed: %d\n", ret);
-
-	return ret;
+	return clk_bulk_prepare_enable(cci->nclocks, cci->clocks);
 }
 
 static void cci_disable_clocks(struct cci *cci)
@@ -469,27 +477,28 @@ static void cci_disable_clocks(struct cci *cci)
 	clk_bulk_disable_unprepare(cci->nclocks, cci->clocks);
 }
 
-#ifdef CONFIG_PM
-static int cci_suspend_runtime(struct device *dev)
+static int __maybe_unused cci_suspend_runtime(struct device *dev)
 {
 	struct cci *cci = dev_get_drvdata(dev);
 
-	dev_dbg(dev, "Supend invoked\n");
 	cci_disable_clocks(cci);
 	return 0;
 }
 
-static int cci_resume_runtime(struct device *dev)
+static int __maybe_unused cci_resume_runtime(struct device *dev)
 {
 	struct cci *cci = dev_get_drvdata(dev);
+	int ret;
 
-	dev_dbg(dev, "Resume invoked\n");
-	return cci_enable_clocks(cci);
+	ret = cci_enable_clocks(cci);
+	if (ret)
+		return ret;
+
+	cci_init(cci);
+	return 0;
 }
-#endif
 
-#ifdef CONFIG_PM_SLEEP
-static int cci_suspend(struct device *dev)
+static int __maybe_unused cci_suspend(struct device *dev)
 {
 	if (!pm_runtime_suspended(dev))
 		return cci_suspend_runtime(dev);
@@ -497,7 +506,7 @@ static int cci_suspend(struct device *dev)
 	return 0;
 }
 
-static int cci_resume(struct device *dev)
+static int __maybe_unused cci_resume(struct device *dev)
 {
 	cci_resume_runtime(dev);
 	pm_runtime_mark_last_busy(dev);
@@ -505,7 +514,6 @@ static int cci_resume(struct device *dev)
 
 	return 0;
 }
-#endif
 
 static const struct dev_pm_ops qcom_cci_pm = {
 	SET_SYSTEM_SLEEP_PM_OPS(cci_suspend, cci_resume)
@@ -515,11 +523,11 @@ static const struct dev_pm_ops qcom_cci_pm = {
 static int cci_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
-	struct device_node *of_node = NULL;
 	unsigned long cci_clk_rate = 0;
+	struct device_node *child;
 	struct resource *r;
 	struct cci *cci;
-	int ret = 0, i;
+	int ret, i;
 	u32 val;
 
 	cci = devm_kzalloc(dev, sizeof(*cci), GFP_KERNEL);
@@ -528,42 +536,46 @@ static int cci_probe(struct platform_device *pdev)
 
 	cci->dev = dev;
 	platform_set_drvdata(pdev, cci);
-	cci->data = device_get_match_data(&pdev->dev);
-	if (!cci->data) {
-		dev_err(&pdev->dev, "Driver data is null, abort\n");
-		return -EIO;
-	}
+	cci->data = device_get_match_data(dev);
+	if (!cci->data)
+		return -ENOENT;
 
-	for (i = 0; i < cci->data->num_masters; i++) {
-		cci->master[i].adap.quirks = &cci->data->quirks;
-		cci->master[i].adap.algo = &cci_algo;
-		cci->master[i].adap.dev.parent = cci->dev;
-		cci->master[i].master = i;
-		cci->master[i].cci = cci;
+	for_each_available_child_of_node(dev->of_node, child) {
+		u32 idx;
 
-		i2c_set_adapdata(&cci->master[i].adap, &cci->master[i]);
-		snprintf(cci->master[i].adap.name,
-			 sizeof(cci->master[i].adap.name),
-			 "Qualcomm Camera Control Interface: %d", i);
-
-		/* find the child node for i2c-bus as we are on cci node */
-		of_node = of_get_next_available_child(dev->of_node, of_node);
-		if (!of_node) {
-			dev_err(dev, "Missing i2c-bus@%d child node\n", i);
-			return -EINVAL;
+		ret = of_property_read_u32(child, "reg", &idx);
+		if (ret) {
+			dev_err(dev, "%pOF invalid 'reg' property", child);
+			continue;
 		}
-		cci->master[i].adap.dev.of_node = of_node;
 
-		cci->master[i].mode = I2C_MODE_STANDARD;
-		ret = of_property_read_u32(of_node, "clock-frequency", &val);
+		if (idx >= cci->data->num_masters) {
+			dev_err(dev, "%pOF invalid 'reg' value: %u (max is %u)",
+				child, idx, cci->data->num_masters - 1);
+			continue;
+		}
+
+		cci->master[idx].adap.quirks = &cci->data->quirks;
+		cci->master[idx].adap.algo = &cci_algo;
+		cci->master[idx].adap.dev.parent = dev;
+		cci->master[idx].adap.dev.of_node = child;
+		cci->master[idx].master = idx;
+		cci->master[idx].cci = cci;
+
+		i2c_set_adapdata(&cci->master[idx].adap, &cci->master[idx]);
+		snprintf(cci->master[idx].adap.name,
+			 sizeof(cci->master[idx].adap.name), "Qualcomm-CCI");
+
+		cci->master[idx].mode = I2C_MODE_STANDARD;
+		ret = of_property_read_u32(child, "clock-frequency", &val);
 		if (!ret) {
 			if (val == 400000)
-				cci->master[i].mode = I2C_MODE_FAST;
+				cci->master[idx].mode = I2C_MODE_FAST;
 			else if (val == 1000000)
-				cci->master[i].mode = I2C_MODE_FAST_PLUS;
+				cci->master[idx].mode = I2C_MODE_FAST_PLUS;
 		}
 
-		init_completion(&cci->master[i].irq_complete);
+		init_completion(&cci->master[idx].irq_complete);
 	}
 
 	/* Memory */
@@ -572,24 +584,6 @@ static int cci_probe(struct platform_device *pdev)
 	cci->base = devm_ioremap_resource(dev, r);
 	if (IS_ERR(cci->base))
 		return PTR_ERR(cci->base);
-
-	/* Interrupt */
-
-	ret = platform_get_irq(pdev, 0);
-	if (ret < 0) {
-		dev_err(dev, "missing IRQ: %d\n", ret);
-		return ret;
-	}
-	cci->irq = ret;
-
-	ret = devm_request_irq(dev, cci->irq, cci_isr,
-			       IRQF_TRIGGER_RISING, dev_name(dev), cci);
-	if (ret < 0) {
-		dev_err(dev, "request_irq failed, ret: %d\n", ret);
-		return ret;
-	}
-
-	disable_irq(cci->irq);
 
 	/* Clocks */
 
@@ -602,7 +596,7 @@ static int cci_probe(struct platform_device *pdev)
 
 	/* Retrieve CCI clock rate */
 	for (i = 0; i < cci->nclocks; i++) {
-		if (!strncmp(cci->clocks[i].id, "cci", 4)) {
+		if (!strcmp(cci->clocks[i].id, "cci")) {
 			cci_clk_rate = clk_get_rate(cci->clocks[i].clk);
 			break;
 		}
@@ -620,40 +614,56 @@ static int cci_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
-	pm_runtime_set_autosuspend_delay(dev, MSEC_PER_SEC);
-	pm_runtime_use_autosuspend(dev);
-	pm_runtime_set_active(dev);
-	pm_runtime_enable(dev);
+	/* Interrupt */
 
-	val = readl_relaxed(cci->base + CCI_HW_VERSION);
-	dev_dbg(dev, "%s: CCI HW version = 0x%08x", __func__, val);
+	ret = platform_get_irq(pdev, 0);
+	if (ret < 0) {
+		dev_err(dev, "missing IRQ: %d\n", ret);
+		goto disable_clocks;
+	}
+	cci->irq = ret;
 
-	enable_irq(cci->irq);
+	ret = devm_request_irq(dev, cci->irq, cci_isr, 0, dev_name(dev), cci);
+	if (ret < 0) {
+		dev_err(dev, "request_irq failed, ret: %d\n", ret);
+		goto disable_clocks;
+	}
+
+	val = readl(cci->base + CCI_HW_VERSION);
+	dev_dbg(dev, "CCI HW version = 0x%08x", val);
 
 	ret = cci_reset(cci);
 	if (ret < 0)
 		goto error;
 
+	ret = cci_init(cci);
+	if (ret < 0)
+		goto error;
+
 	for (i = 0; i < cci->data->num_masters; i++) {
-		ret = cci_init(cci, &cci->data->params[cci->master[i].mode]);
-		if (ret < 0)
-			goto pm_error;
+		if (!cci->master[i].cci)
+			continue;
 
 		ret = i2c_add_adapter(&cci->master[i].adap);
 		if (ret < 0)
 			goto error_i2c;
 	}
 
+	pm_runtime_set_autosuspend_delay(dev, MSEC_PER_SEC);
+	pm_runtime_use_autosuspend(dev);
+	pm_runtime_set_active(dev);
+	pm_runtime_enable(dev);
+
 	return 0;
 
 error_i2c:
-	for (; i >= 0; i--)
-		i2c_del_adapter(&cci->master[i].adap);
-pm_error:
-	pm_runtime_disable(dev);
-	pm_runtime_set_suspended(dev);
+	for (; i >= 0; i--) {
+		if (cci->master[i].cci)
+			i2c_del_adapter(&cci->master[i].adap);
+	}
 error:
 	disable_irq(cci->irq);
+disable_clocks:
 	cci_disable_clocks(cci);
 
 	return ret;
@@ -665,7 +675,8 @@ static int cci_remove(struct platform_device *pdev)
 	int i;
 
 	for (i = 0; i < cci->data->num_masters; i++) {
-		i2c_del_adapter(&cci->master[i].adap);
+		if (cci->master[i].cci)
+			i2c_del_adapter(&cci->master[i].adap);
 		cci_halt(cci, i);
 	}
 
@@ -676,7 +687,7 @@ static int cci_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct cci_data cci_8916_data = {
+static const struct cci_data cci_v1_data = {
 	.num_masters = 1,
 	.queue_size = { 64, 16 },
 	.quirks = {
@@ -710,7 +721,7 @@ static const struct cci_data cci_8916_data = {
 	},
 };
 
-static const struct cci_data cci_8996_data = {
+static const struct cci_data cci_v2_data = {
 	.num_masters = 2,
 	.queue_size = { 64, 16 },
 	.quirks = {
@@ -757,8 +768,9 @@ static const struct cci_data cci_8996_data = {
 };
 
 static const struct of_device_id cci_dt_match[] = {
-	{ .compatible = "qcom,msm8916-cci", .data = &cci_8916_data},
-	{ .compatible = "qcom,msm8996-cci", .data = &cci_8996_data},
+	{ .compatible = "qcom,msm8916-cci", .data = &cci_v1_data},
+	{ .compatible = "qcom,msm8996-cci", .data = &cci_v2_data},
+	{ .compatible = "qcom,sdm845-cci", .data = &cci_v2_data},
 	{}
 };
 MODULE_DEVICE_TABLE(of, cci_dt_match);

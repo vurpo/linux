@@ -42,7 +42,7 @@
 #define IMX219_CHIP_ID			0x0219
 
 /* External clock frequency is 24.0M */
-#define IMX219_XCLK_FREQ		24000000
+#define IMX219_XCLK_FREQ		23880000
 
 /* Pixel rate is fixed at 182.4M for all the modes */
 #define IMX219_PIXEL_RATE		182400000
@@ -341,8 +341,8 @@ static const int imx219_test_pattern_val[] = {
 /* regulator supplies */
 static const char * const imx219_supply_name[] = {
 	/* Supplies can be enabled in any order */
-	"VANA",  /* Analog (2.8V) supply */
 	"VDIG",  /* Digital Core (1.8V) supply */
+	"VANA",  /* Analog (2.8V) supply */
 	"VDDL",  /* IF (1.2V) supply */
 };
 
@@ -887,6 +887,8 @@ static int imx219_power_on(struct device *dev)
 		return ret;
 	}
 
+	usleep_range(100000, 100000);
+
 	ret = clk_prepare_enable(imx219->xclk);
 	if (ret) {
 		dev_err(&client->dev, "%s: failed to enable clock\n",
@@ -894,7 +896,10 @@ static int imx219_power_on(struct device *dev)
 		goto reg_off;
 	}
 
+	usleep_range(500, 1000);
+
 	gpiod_set_value_cansleep(imx219->reset_gpio, 1);
+
 	usleep_range(IMX219_XCLR_MIN_DELAY_US,
 		     IMX219_XCLR_MIN_DELAY_US + IMX219_XCLR_DELAY_RANGE_US);
 
@@ -1194,20 +1199,32 @@ static int imx219_probe(struct i2c_client *client)
 
 	imx219->xclk_freq = clk_get_rate(imx219->xclk);
 	if (imx219->xclk_freq != IMX219_XCLK_FREQ) {
-		dev_err(dev, "xclk frequency not supported: %d Hz\n",
+		/* Attempt to change the frequency */
+		printk("XXX - imx219->xclk_freq: %d", imx219->xclk_freq);
+		ret = clk_set_rate(imx219->xclk, IMX219_XCLK_FREQ);
+		if (ret) {
+			dev_err(dev, "could not set xclk frequency\n");
+
+			dev_err(dev, "xclk frequency not supported: %d Hz\n",
 			imx219->xclk_freq);
-		return -EINVAL;
+
+			return ret;
+		}
+
+		imx219->xclk_freq = clk_get_rate(imx219->xclk);
+		printk("XXX - now: imx219->xclk_freq: %d\n", imx219->xclk_freq);
+
 	}
 
 	ret = imx219_get_regulators(imx219);
 	if (ret) {
-		dev_err(dev, "failed to get regulators\n");
+		dev_err(dev, "failed to get regulators: %d\n", ret);
 		return ret;
 	}
 
 	/* Request optional enable pin */
 	imx219->reset_gpio = devm_gpiod_get_optional(dev, "reset",
-						     GPIOD_OUT_HIGH);
+						     GPIOD_OUT_LOW);
 
 	/*
 	 * The sensor must be powered for imx219_identify_module()
@@ -1216,10 +1233,6 @@ static int imx219_probe(struct i2c_client *client)
 	ret = imx219_power_on(dev);
 	if (ret)
 		return ret;
-
-	ret = imx219_identify_module(imx219);
-	if (ret)
-		goto error_power_off;
 
 	/* Set default mode to max resolution */
 	imx219->mode = &supported_modes[0];
@@ -1241,6 +1254,10 @@ static int imx219_probe(struct i2c_client *client)
 		dev_err(dev, "failed to init entity pads: %d\n", ret);
 		goto error_handler_free;
 	}
+
+	ret = imx219_identify_module(imx219);
+	if (ret)
+		goto error_power_off;
 
 	ret = v4l2_async_register_subdev_sensor_common(&imx219->sd);
 	if (ret < 0) {

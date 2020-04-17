@@ -70,6 +70,75 @@
 	};
 };
 
+&camss {
+	status = "okay";
+
+	ports {
+		port@0 {
+			reg = <0>;
+			csiphy0_ep: endpoint {
+				clock-lanes = <1>;
+				data-lanes = <0 2>;
+				remote-endpoint = <&imx219_ep>;
+			};
+		};
+	};
+};
+
+&soc {
+	
+	cci@1b0c000 {
+		compatible = "qcom,msm8916-cci";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		reg = <0x1b0c000 0x1000>;
+		interrupts = <GIC_SPI 50 IRQ_TYPE_EDGE_RISING>;
+		clocks = <&gcc GCC_CAMSS_TOP_AHB_CLK>,
+			<&gcc GCC_CAMSS_CCI_AHB_CLK>,
+			<&gcc GCC_CAMSS_CCI_CLK>,
+			<&gcc GCC_CAMSS_AHB_CLK>;
+		clock-names = "camss_top_ahb", "cci_ahb",
+			      "cci", "camss_ahb";
+		assigned-clocks = <&gcc GCC_CAMSS_CCI_AHB_CLK>,
+				  <&gcc GCC_CAMSS_CCI_CLK>;
+		assigned-clock-rates = <80000000>, <19200000>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&cci0_default>;
+//		status = "disabled";
+
+		cci0: i2c-bus@0 {
+			reg = <0>;
+			clock-frequency = <400000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			imx219@1a {
+				reg = <0x1a>;
+
+				compatible = "sony,imx219";
+
+				VANA-supply = <&cam_sensor_a2_8V>;
+				VDIG-supply = <&pm8916_l16>;
+				VDDL-supply = <&cam_sensor_core_1_2V>;
+
+				reset-gpios = <&msmgpio 35 GPIO_ACTIVE_HIGH>;
+
+				clocks = <&gcc GCC_CAMSS_MCLK0_CLK>;
+
+				pinctrl-0 = <&imx219_default>, <&imx219_reset_default>, <&cam2_reset_default>;
+
+				port {
+					imx219_ep: endpoint {
+						data-lanes = <1 2>;
+						remote-endpoint = <&csiphy0_ep>;
+						link-frequencies = /bits/ 64 <456000000>;
+					};
+				};
+			};
+		};
+	};
+};
+
 &dsi0 {
 	panel@0 {
 		reg = <0>;
@@ -142,6 +211,55 @@
 		pinconf {
 			pins = "gpio13";
 			drive-strength = <2>;
+			bias-disable;
+		};
+	};
+
+	imx219_default: imx219_default {
+		pinmux {
+			function = "cam_mclk0";
+			pins = "gpio26";
+		};
+		pinconf {
+			pins = "gpio26";
+			drive-strength = <16>;
+			bias-disable;
+		};
+	};
+
+	imx219_reset_default: imx219_reset_default {
+		pinmux {
+			function = "gpio";
+			pins = "gpio35";
+		};
+		pinconf {
+			pins = "gpio35";
+			drive-strength = <16>;
+			bias-disable;
+		};
+	};
+
+	cam2_reset_default: cam2_reset_default {
+		pinmux {
+			function = "gpio";
+			pins = "gpio28";
+		};
+		pinconf {
+			pins = "gpio28";
+			drive-strength = <16>;
+			bias-disable;
+			output-low;
+		};
+	};
+
+	cci0_default: cci0_default {
+		pinmux {
+			function = "cci_i2c";
+			pins = "gpio29", "gpio30";
+		};
+		pinconf {
+			pins = "gpio29", "gpio30";
+			drive-strength = <16>;
 			bias-disable;
 		};
 	};
