@@ -25,7 +25,6 @@
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
 #include <linux/skbuff.h>
-#include <linux/wakelock.h>
 #include <linux/if_arp.h>
 #include <linux/msm_rmnet.h>
 #include <linux/platform_device.h>
@@ -274,7 +273,7 @@ static int _rmnet_xmit(struct sk_buff *skb, struct net_device *dev)
 		qmih->flow_id = skb->mark;
 	}
 
-	dev->trans_start = jiffies;
+	//dev->trans_start = jiffies;
 	/* if write() succeeds, skb access is unsafe in this process */
 	bam_ret = msm_bam_dmux_write(p->ch_id, skb);
 
@@ -358,6 +357,21 @@ static void bam_notify(void *dev, int event, unsigned long data)
 
 static int __rmnet_open(struct net_device *dev)
 {
+	int r;
+	struct rmnet_private *p = netdev_priv(dev);
+
+	DBG0("[%s] __rmnet_open()\n", dev->name);
+
+	if (p->device_up == DEVICE_UNINITIALIZED) {
+		r = msm_bam_dmux_open(p->ch_id, dev, bam_notify);
+		if (r < 0) {
+			DBG0("%s: ch=%d failed with rc %d\n",
+					__func__, p->ch_id, r);
+			return -ENODEV;
+		}
+	}
+
+	p->device_up = DEVICE_ACTIVE;
 	return 0;
 }
 
@@ -367,7 +381,10 @@ static int rmnet_open(struct net_device *dev)
 
 	DBG0("[%s] rmnet_open()\n", dev->name);
 
-	netif_start_queue(dev);
+	rc = __rmnet_open(dev);
+
+	if (rc == 0)
+		netif_start_queue(dev);
 
 	return rc;
 }
@@ -484,9 +501,9 @@ static struct net_device_stats *rmnet_get_stats(struct net_device *dev)
 	return &p->stats;
 }
 
-static void rmnet_tx_timeout(struct net_device *dev)
+static void rmnet_tx_timeout(struct net_device *dev, unsigned int txqueue)
 {
-	pr_warning("[%s] rmnet_tx_timeout()\n", dev->name);
+	pr_warn("[%s] rmnet_tx_timeout()\n", dev->name);
 }
 
 static const struct net_device_ops rmnet_ops_ether = {
@@ -661,6 +678,7 @@ static int rmnet_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 			dev->name);
 		break;
 
+#if 0
 	case RMNET_IOCTL_FLOW_ENABLE:
 		if (copy_from_user(&ioctl_data, ifr->ifr_ifru.ifru_data,
 			sizeof(struct rmnet_ioctl_data_s))) {
@@ -680,6 +698,7 @@ static int rmnet_ioctl(struct net_device *dev, struct ifreq *ifr, int cmd)
 		tc_qdisc_flow_control(dev, ioctl_data.u.tcm_handle, 0);
 		DBG0("[%s] rmnet_ioctl(): disabled flow", dev->name);
 		break;
+#endif
 
 	case RMNET_IOCTL_GET_QOS:           /* Get QoS header state    */
 		ioctl_data.u.operation_mode = (p->operation_mode
@@ -792,7 +811,7 @@ static int bam_rmnet_probe(struct platform_device *pdev)
 	else
 		dev_name = "rev_rmnet%d";
 
-	dev = alloc_netdev(sizeof(*p), dev_name, rmnet_setup);
+	dev = alloc_netdev(sizeof(*p), dev_name, NET_NAME_ENUM, rmnet_setup);
 	if (!dev) {
 		pr_err("%s: no memory for netdev %d\n", __func__, i);
 		return -ENOMEM;
@@ -819,21 +838,6 @@ static int bam_rmnet_probe(struct platform_device *pdev)
 	}
 
 	rmnet_debug_init(dev);
-
-	DBG0("[%s] OPEN()\n", dev->name);
-
-	if (p->device_up == DEVICE_UNINITIALIZED) {
-		ret = msm_bam_dmux_open(p->ch_id, dev, bam_notify);
-		if (ret < 0) {
-			DBG0("%s: ch=%d failed with rc %d\n",
-			     __func__, p->ch_id, ret);
-			unregister_netdev(dev);
-			free_netdev(dev);
-			return -EPROBE_DEFER;
-		}
-	}
-
-	p->device_up = DEVICE_ACTIVE;
 	return 0;
 }
 
@@ -917,4 +921,3 @@ static int __init rmnet_init(void)
 module_init(rmnet_init);
 MODULE_DESCRIPTION("MSM RMNET BAM TRANSPORT");
 MODULE_LICENSE("GPL v2");
-

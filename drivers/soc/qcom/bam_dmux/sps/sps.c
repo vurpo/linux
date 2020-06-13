@@ -104,15 +104,6 @@ static int wraparound;
 static struct mutex sps_debugfs_lock;
 
 struct dentry *dent;
-struct dentry *dfile_info;
-struct dentry *dfile_logging_option;
-struct dentry *dfile_debug_level_option;
-struct dentry *dfile_print_limit_option;
-struct dentry *dfile_reg_dump_option;
-struct dentry *dfile_testbus_sel;
-struct dentry *dfile_bam_pipe_sel;
-struct dentry *dfile_desc_option;
-struct dentry *dfile_bam_addr;
 
 static struct sps_bam *phy2bam(phys_addr_t phys_addr);
 
@@ -553,118 +544,21 @@ static void sps_debugfs_init(void)
 		return;
 	}
 
-	dfile_info = debugfs_create_file("info", 0664, dent, 0,
-			&sps_info_ops);
-	if (!dfile_info || IS_ERR(dfile_info)) {
-		pr_err("sps:fail to create the file for debug_fs info.\n");
-		goto info_err;
-	}
-
-	dfile_logging_option = debugfs_create_file("logging_option", 0664,
-			dent, 0, &sps_logging_option_ops);
-	if (!dfile_logging_option || IS_ERR(dfile_logging_option)) {
-		pr_err("sps:fail to create the file for debug_fs "
-			"logging_option.\n");
-		goto logging_option_err;
-	}
-
-	dfile_debug_level_option = debugfs_create_u8("debug_level_option",
-					0664, dent, &debug_level_option);
-	if (!dfile_debug_level_option || IS_ERR(dfile_debug_level_option)) {
-		pr_err("sps:fail to create the file for debug_fs "
-			"debug_level_option.\n");
-		goto debug_level_option_err;
-	}
-
-	dfile_print_limit_option = debugfs_create_u8("print_limit_option",
-					0664, dent, &print_limit_option);
-	if (!dfile_print_limit_option || IS_ERR(dfile_print_limit_option)) {
-		pr_err("sps:fail to create the file for debug_fs "
-			"print_limit_option.\n");
-		goto print_limit_option_err;
-	}
-
-	dfile_reg_dump_option = debugfs_create_u8("reg_dump_option", 0664,
-						dent, &reg_dump_option);
-	if (!dfile_reg_dump_option || IS_ERR(dfile_reg_dump_option)) {
-		pr_err("sps:fail to create the file for debug_fs "
-			"reg_dump_option.\n");
-		goto reg_dump_option_err;
-	}
-
-	dfile_testbus_sel = debugfs_create_u32("testbus_sel", 0664,
-						dent, &testbus_sel);
-	if (!dfile_testbus_sel || IS_ERR(dfile_testbus_sel)) {
-		pr_err("sps:fail to create debug_fs file for testbus_sel.\n");
-		goto testbus_sel_err;
-	}
-
-	dfile_bam_pipe_sel = debugfs_create_u32("bam_pipe_sel", 0664,
-						dent, &bam_pipe_sel);
-	if (!dfile_bam_pipe_sel || IS_ERR(dfile_bam_pipe_sel)) {
-		pr_err("sps:fail to create debug_fs file for bam_pipe_sel.\n");
-		goto bam_pipe_sel_err;
-	}
-
-	dfile_desc_option = debugfs_create_u32("desc_option", 0664,
-						dent, &desc_option);
-	if (!dfile_desc_option || IS_ERR(dfile_desc_option)) {
-		pr_err("sps:fail to create debug_fs file for desc_option.\n");
-		goto desc_option_err;
-	}
-
-	dfile_bam_addr = debugfs_create_file("bam_addr", 0664,
-			dent, 0, &sps_bam_addr_ops);
-	if (!dfile_bam_addr || IS_ERR(dfile_bam_addr)) {
-		pr_err("sps:fail to create the file for debug_fs "
-			"bam_addr.\n");
-		goto bam_addr_err;
-	}
+	debugfs_create_file("info", 0664, dent, 0, &sps_info_ops);
+	debugfs_create_file("logging_option", 0664, dent, 0, &sps_logging_option_ops);
+	debugfs_create_u8("debug_level_option", 0664, dent, &debug_level_option);
+	debugfs_create_u8("print_limit_option", 0664, dent, &print_limit_option);
+	debugfs_create_u8("reg_dump_option", 0664, dent, &reg_dump_option);
+	debugfs_create_u32("testbus_sel", 0664, dent, &testbus_sel);
+	debugfs_create_u32("bam_pipe_sel", 0664, dent, &bam_pipe_sel);
+	debugfs_create_u32("desc_option", 0664, dent, &desc_option);
+	debugfs_create_file("bam_addr", 0664, dent, 0, &sps_bam_addr_ops);
 
 	mutex_init(&sps_debugfs_lock);
-
-	return;
-
-bam_addr_err:
-	debugfs_remove(dfile_desc_option);
-desc_option_err:
-	debugfs_remove(dfile_bam_pipe_sel);
-bam_pipe_sel_err:
-	debugfs_remove(dfile_testbus_sel);
-testbus_sel_err:
-	debugfs_remove(dfile_reg_dump_option);
-reg_dump_option_err:
-	debugfs_remove(dfile_print_limit_option);
-print_limit_option_err:
-	debugfs_remove(dfile_debug_level_option);
-debug_level_option_err:
-	debugfs_remove(dfile_logging_option);
-logging_option_err:
-	debugfs_remove(dfile_info);
-info_err:
-	debugfs_remove(dent);
 }
 
 static void sps_debugfs_exit(void)
 {
-	if (dfile_info)
-		debugfs_remove(dfile_info);
-	if (dfile_logging_option)
-		debugfs_remove(dfile_logging_option);
-	if (dfile_debug_level_option)
-		debugfs_remove(dfile_debug_level_option);
-	if (dfile_print_limit_option)
-		debugfs_remove(dfile_print_limit_option);
-	if (dfile_reg_dump_option)
-		debugfs_remove(dfile_reg_dump_option);
-	if (dfile_testbus_sel)
-		debugfs_remove(dfile_testbus_sel);
-	if (dfile_bam_pipe_sel)
-		debugfs_remove(dfile_bam_pipe_sel);
-	if (dfile_desc_option)
-		debugfs_remove(dfile_desc_option);
-	if (dfile_bam_addr)
-		debugfs_remove(dfile_bam_addr);
 	if (dent)
 		debugfs_remove(dent);
 	kfree(debugfs_buf);
@@ -2816,4 +2710,3 @@ module_exit(sps_exit);
 
 MODULE_LICENSE("GPL v2");
 MODULE_DESCRIPTION("Smart Peripheral Switch (SPS)");
-

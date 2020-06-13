@@ -25,16 +25,17 @@
 #include <linux/skbuff.h>
 #include <linux/debugfs.h>
 #include <linux/clk.h>
-#include <linux/wakelock.h>
+//#include <linux/wakelock.h>
 #include <linux/of.h>
-#include <linux/ipc_logging.h>
+//#include <linux/ipc_logging.h>
 #include <linux/srcu.h>
 #include <linux/msm-sps.h>
 #include <linux/sizes.h>
 #include <soc/qcom/bam_dmux.h>
-#include <soc/qcom/smsm.h>
-#include <soc/qcom/subsystem_restart.h>
-#include <soc/qcom/subsystem_notif.h>
+//#include <soc/qcom/smsm.h>
+//#include <soc/qcom/subsystem_restart.h>
+//#include <soc/qcom/subsystem_notif.h>
+#include <linux/soc/qcom/smem_state.h>
 
 #include "bam_dmux_private.h"
 
@@ -64,6 +65,109 @@ static int bam_adaptive_timer_enabled;
 module_param_named(adaptive_timer_enabled,
 			bam_adaptive_timer_enabled,
 		   int, S_IRUGO | S_IWUSR | S_IWGRP);
+
+enum {
+	SMSM_APPS_STATE,
+	SMSM_MODEM_STATE,
+};
+#define SMSM_A2_POWER_CONTROL  0x00000002
+#define SMSM_A2_POWER_CONTROL_ACK  0x00000800
+
+static struct device *dma_dev;
+static struct qcom_smem_state *smsm_state = NULL;
+static int smsm_a2_pc_irq = 0;
+static int smsm_a2_pc_ack_irq = 0;
+void (*smsm_a2_pc_notify)(void *, uint32_t old_state, uint32_t new_state);
+void (*smsm_a2_pc_ack_notify)(void *, uint32_t old_state, uint32_t new_state);
+
+static int smsm_change_state(uint32_t smsm_entry,
+			     uint32_t clear_mask, uint32_t set_mask)
+{
+	if (!smsm_state || smsm_entry != SMSM_APPS_STATE)
+		return -ENODEV;
+
+	return qcom_smem_state_update_bits(smsm_state, clear_mask, set_mask);
+}
+
+static uint32_t smsm_read_irq_state(int irq)
+{
+	int ret;
+	bool state;
+
+	ret = irq_get_irqchip_state(irq, IRQCHIP_STATE_LINE_LEVEL, &state);
+	if (ret) {
+		dev_err(dma_dev, "failed to get irqchip state: %d\n", ret);
+		return 0;
+	}
+
+	// The state is always only checked for one bit anyway
+	return state ? U32_MAX : 0;
+}
+
+static uint32_t smsm_get_state(uint32_t smsm_entry)
+{
+	if (smsm_entry != SMSM_MODEM_STATE)
+		return 0;
+
+	// We return only SMSM_A2_POWER_CONTROL here,
+	// but that's the only thing that is used anyway.
+	return smsm_read_irq_state(smsm_a2_pc_irq);
+}
+
+static irqreturn_t smsm_intr(int irq, void *data)
+{
+	// The interrupt is only called on changes, so the old state is simply inverted
+	uint32_t state = smsm_read_irq_state(irq);
+	uint32_t old_state = state ^ U32_MAX;
+
+	if (irq == smsm_a2_pc_irq)
+		smsm_a2_pc_notify(data, old_state, state);
+	else if (irq == smsm_a2_pc_ack_irq)
+		smsm_a2_pc_ack_notify(data, old_state, state);
+
+	return IRQ_HANDLED;
+}
+
+static int smsm_state_cb_register(uint32_t smsm_entry, uint32_t mask,
+	void (*notify)(void *, uint32_t old_state, uint32_t new_state),
+	void *data)
+{
+	int ret, irq;
+
+	if (smsm_entry != SMSM_MODEM_STATE)
+		return -EINVAL;
+
+	switch (mask) {
+	case SMSM_A2_POWER_CONTROL:
+		irq = smsm_a2_pc_irq;
+		smsm_a2_pc_notify = notify;
+		break;
+	case SMSM_A2_POWER_CONTROL_ACK:
+		irq = smsm_a2_pc_ack_irq;
+		smsm_a2_pc_ack_notify = notify;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	ret = devm_request_threaded_irq(dma_dev, irq, NULL, smsm_intr,
+					IRQF_TRIGGER_RISING |
+					IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+					NULL, data);
+	if (ret) {
+		dev_err(dma_dev, "failed to request IRQ: %d\n", ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+static int smsm_state_cb_deregister(uint32_t smsm_entry, uint32_t mask,
+	void (*notify)(void *, uint32_t, uint32_t), void *data)
+{
+	// Unused, we use the devm function
+	return 0;
+}
 
 static struct bam_ops_if bam_default_ops = {
 	/* smsm */
@@ -197,7 +301,6 @@ static struct sps_register_event rx_register_event;
 static bool satellite_mode;
 static uint32_t num_buffers;
 static unsigned long long last_rx_pkt_timestamp;
-static struct device *dma_dev;
 static bool dynamic_mtu_enabled;
 static uint16_t ul_mtu = DEFAULT_BUFFER_SIZE;
 static uint16_t dl_mtu = DEFAULT_BUFFER_SIZE;
@@ -261,14 +364,14 @@ static DEFINE_RWLOCK(ul_wakeup_lock);
 static DECLARE_WORK(kickoff_ul_wakeup, kickoff_ul_wakeup_func);
 static int bam_connection_is_active;
 static int wait_for_ack;
-static struct wake_lock bam_wakelock;
+//static struct wake_lock bam_wakelock;
 static int a2_pc_disabled;
 static DEFINE_MUTEX(dfab_status_lock);
 static int dfab_is_on;
 static int wait_for_dfab;
 static struct completion dfab_unvote_completion;
-static DEFINE_SPINLOCK(wakelock_reference_lock);
-static int wakelock_reference_count;
+//static DEFINE_SPINLOCK(wakelock_reference_lock);
+//static int wakelock_reference_count;
 static int a2_pc_disabled_wakelock_skipped;
 static LIST_HEAD(bam_other_notify_funcs);
 static DEFINE_MUTEX(smsm_cb_lock);
@@ -286,6 +389,7 @@ struct outside_notify_func {
 /* End A2 power collaspe */
 
 /* subsystem restart */
+#if 0
 static int restart_notifier_cb(struct notifier_block *this,
 				unsigned long code,
 				void *data);
@@ -293,7 +397,8 @@ static int restart_notifier_cb(struct notifier_block *this,
 static struct notifier_block restart_notifier = {
 	.notifier_call = restart_notifier_cb,
 };
-static int in_global_reset;
+#endif
+static int in_global_reset = 0;
 /* end subsystem restart */
 
 #define bam_ch_is_open(x)						\
@@ -310,8 +415,6 @@ static int in_global_reset;
 
 static int bam_dmux_uplink_vote;
 static int bam_dmux_power_state;
-
-static void *bam_ipc_log_txt;
 
 #define BAM_IPC_LOG_PAGES 5
 
@@ -335,8 +438,7 @@ static void *bam_ipc_log_txt;
 
 #define BAM_DMUX_LOG(fmt, args...) \
 do { \
-	if (bam_ipc_log_txt) { \
-		ipc_log_string(bam_ipc_log_txt, \
+		pr_debug( \
 		"<DMUX> %c%c%c%c %c%c%c%c%d " fmt, \
 		a2_pc_disabled ? 'D' : 'd', \
 		in_global_reset ? 'R' : 'r', \
@@ -348,7 +450,6 @@ do { \
 		ul_wakeup_ack_completion.done ? 'A' : 'a', \
 		atomic_read(&ul_ondemand_vote), \
 		args); \
-	} \
 } while (0)
 
 #define DMUX_LOG_KERR(fmt, args...) \
@@ -1523,7 +1624,7 @@ static void bam_mux_rx_notify(struct sps_event_notify *notify)
 					" not disabled\n", __func__, ret);
 				break;
 			}
-			INIT_COMPLETION(shutdown_completion);
+			reinit_completion(&shutdown_completion);
 			grab_wakelock();
 			polling_mode = 1;
 			/*
@@ -1568,7 +1669,7 @@ static int debug_ul_pkt_cnt(char *buf, int max)
 	int n = 0;
 
 	spin_lock_irqsave(&bam_tx_pool_spinlock, flags);
-	__list_for_each(p, &bam_tx_pool) {
+	list_for_each(p, &bam_tx_pool) {
 		++n;
 	}
 	spin_unlock_irqrestore(&bam_tx_pool_spinlock, flags);
@@ -1667,7 +1768,7 @@ static void notify_all(int event, unsigned long data)
 			notify(priv, event, data);
 	}
 
-	__list_for_each(temp, &bam_other_notify_funcs) {
+	list_for_each(temp, &bam_other_notify_funcs) {
 		func = container_of(temp, struct outside_notify_func,
 								list_node);
 		func->notify(func->priv, event, data);
@@ -1730,11 +1831,11 @@ static inline void ul_powerdown(void)
 
 	if (a2_pc_disabled) {
 		wait_for_dfab = 1;
-		INIT_COMPLETION(dfab_unvote_completion);
+		reinit_completion(&dfab_unvote_completion);
 		release_wakelock();
 	} else {
 		wait_for_ack = 1;
-		INIT_COMPLETION(ul_wakeup_ack_completion);
+		reinit_completion(&ul_wakeup_ack_completion);
 		power_vote(0);
 	}
 	bam_is_connected = 0;
@@ -1852,7 +1953,7 @@ static void ul_timeout(struct work_struct *work)
 
 static int ssrestart_check(void)
 {
-	int ret = 0;
+	//int ret = 0;
 
 	if (in_global_reset) {
 		DMUX_LOG_KERR("%s: already in SSR\n",
@@ -1863,10 +1964,12 @@ static int ssrestart_check(void)
 	DMUX_LOG_KERR(
 		"%s: fatal modem interaction: BAM DMUX disabled for SSR\n",
 								__func__);
+#if 0
 	in_global_reset = 1;
 	ret = subsystem_restart("modem");
 	if (ret == -ENODEV)
 		panic("modem subsystem restart failed\n");
+#endif
 	return 1;
 }
 
@@ -1951,7 +2054,7 @@ static void ul_wakeup(void)
 			return;
 		}
 	}
-	INIT_COMPLETION(ul_wakeup_ack_completion);
+	reinit_completion(&ul_wakeup_ack_completion);
 	power_vote(1);
 	BAM_DMUX_LOG("%s waiting for wakeup ack\n", __func__);
 	ret = wait_for_completion_timeout(&ul_wakeup_ack_completion,
@@ -2056,7 +2159,7 @@ static void disconnect_to_bam(void)
 	ul_powerdown_finish();
 
 	/* tear down BAM connection */
-	INIT_COMPLETION(bam_connection_completion);
+	reinit_completion(&bam_connection_completion);
 
 	/* in_ssr documentation/assumptions found in restart_notifier_cb */
 	if (likely(!in_ssr)) {
@@ -2137,6 +2240,7 @@ static void unvote_dfab(void)
 /* reference counting wrapper around wakelock */
 static void grab_wakelock(void)
 {
+#if 0
 	unsigned long flags;
 
 	spin_lock_irqsave(&wakelock_reference_lock, flags);
@@ -2146,10 +2250,12 @@ static void grab_wakelock(void)
 		wake_lock(&bam_wakelock);
 	++wakelock_reference_count;
 	spin_unlock_irqrestore(&wakelock_reference_lock, flags);
+#endif
 }
 
 static void release_wakelock(void)
 {
+#if 0
 	unsigned long flags;
 
 	spin_lock_irqsave(&wakelock_reference_lock, flags);
@@ -2165,8 +2271,10 @@ static void release_wakelock(void)
 	if (wakelock_reference_count == 0)
 		wake_unlock(&bam_wakelock);
 	spin_unlock_irqrestore(&wakelock_reference_lock, flags);
+#endif
 }
 
+#if 0
 static int restart_notifier_cb(struct notifier_block *this,
 				unsigned long code,
 				void *data)
@@ -2262,6 +2370,7 @@ static int restart_notifier_cb(struct notifier_block *this,
 	BAM_DMUX_LOG("%s: complete\n", __func__);
 	return NOTIFY_DONE;
 }
+#endif
 
 static int bam_init(void)
 {
@@ -2275,7 +2384,7 @@ static int bam_init(void)
 	in_ssr = 0;
 	vote_dfab();
 	/* init BAM */
-	a2_virt_addr = ioremap_nocache(a2_phys_base, a2_phys_size);
+	a2_virt_addr = ioremap(a2_phys_base, a2_phys_size);
 	if (!a2_virt_addr) {
 		pr_err("%s: ioremap failed\n", __func__);
 		ret = -ENOMEM;
@@ -2530,8 +2639,8 @@ EXPORT_SYMBOL(msm_bam_dmux_set_bam_ops);
  */
 void msm_bam_dmux_deinit(void)
 {
-	restart_notifier_cb(NULL, SUBSYS_BEFORE_SHUTDOWN, NULL);
-	restart_notifier_cb(NULL, SUBSYS_AFTER_SHUTDOWN, NULL);
+	//restart_notifier_cb(NULL, SUBSYS_BEFORE_SHUTDOWN, NULL);
+	//restart_notifier_cb(NULL, SUBSYS_AFTER_SHUTDOWN, NULL);
 	in_global_reset = 0;
 	in_ssr = 0;
 }
@@ -2615,8 +2724,9 @@ static int bam_dmux_probe(struct platform_device *pdev)
 {
 	int rc;
 	struct resource *r;
-	void *subsys_h;
+	//void *subsys_h;
 	uint32_t requested_dl_mtu;
+	unsigned bit;
 
 	DBG("%s probe called\n", __func__);
 	if (bam_mux_initialized)
@@ -2698,6 +2808,20 @@ static int bam_dmux_probe(struct platform_device *pdev)
 	*dma_dev->dma_mask = DMA_BIT_MASK(32);
 	dma_dev->coherent_dma_mask = DMA_BIT_MASK(32);
 
+	smsm_state = qcom_smem_state_get(&pdev->dev, "smsm", &bit);
+	if (IS_ERR(smsm_state)) {
+		rc = PTR_ERR(smsm_state);
+		BAM_DMUX_LOG("%s: failed to get smsm state: %d\n", __func__, rc);
+		return rc;
+	}
+
+	smsm_a2_pc_irq = platform_get_irq_byname(pdev, "pc");
+	smsm_a2_pc_ack_irq = platform_get_irq_byname(pdev, "pc-ack");
+	if (smsm_a2_pc_irq < 0 || smsm_a2_pc_ack_irq < 0) {
+		BAM_DMUX_LOG("%s: failed to get irq %d %d\n", __func__, smsm_a2_pc_irq, smsm_a2_pc_ack_irq);
+		return -EINVAL;
+	}
+
 	xo_clk = clk_get(&pdev->dev, "xo");
 	if (IS_ERR(xo_clk)) {
 		BAM_DMUX_LOG("%s: did not get xo clock\n", __func__);
@@ -2749,9 +2873,10 @@ static int bam_dmux_probe(struct platform_device *pdev)
 	init_completion(&shutdown_completion);
 	complete_all(&shutdown_completion);
 	INIT_DELAYED_WORK(&ul_timeout_work, ul_timeout);
-	wake_lock_init(&bam_wakelock, WAKE_LOCK_SUSPEND, "bam_dmux_wakelock");
+	//wake_lock_init(&bam_wakelock, WAKE_LOCK_SUSPEND, "bam_dmux_wakelock");
 	init_srcu_struct(&bam_dmux_srcu);
 
+#if 0
 	subsys_h = subsys_notif_register_notifier("modem", &restart_notifier);
 	if (IS_ERR(subsys_h)) {
 		destroy_workqueue(bam_mux_rx_workqueue);
@@ -2760,13 +2885,14 @@ static int bam_dmux_probe(struct platform_device *pdev)
 		pr_err("%s: failed to register for ssr rc: %d\n", __func__, rc);
 		return rc;
 	}
+#endif
 
 	rc = bam_ops->smsm_state_cb_register_ptr(SMSM_MODEM_STATE,
 			SMSM_A2_POWER_CONTROL,
 			bam_dmux_smsm_cb, NULL);
 
 	if (rc) {
-		subsys_notif_unregister_notifier(subsys_h, &restart_notifier);
+		//subsys_notif_unregister_notifier(subsys_h, &restart_notifier);
 		destroy_workqueue(bam_mux_rx_workqueue);
 		destroy_workqueue(bam_mux_tx_workqueue);
 		pr_err("%s: smsm cb register failed, rc: %d\n", __func__, rc);
@@ -2778,7 +2904,7 @@ static int bam_dmux_probe(struct platform_device *pdev)
 			bam_dmux_smsm_ack_cb, NULL);
 
 	if (rc) {
-		subsys_notif_unregister_notifier(subsys_h, &restart_notifier);
+		//subsys_notif_unregister_notifier(subsys_h, &restart_notifier);
 		destroy_workqueue(bam_mux_rx_workqueue);
 		destroy_workqueue(bam_mux_tx_workqueue);
 		bam_ops->smsm_state_cb_deregister_ptr(SMSM_MODEM_STATE,
@@ -2825,12 +2951,6 @@ static int __init bam_dmux_init(void)
 		debug_create("stats", 0444, dent, debug_stats);
 	}
 #endif
-
-	bam_ipc_log_txt = ipc_log_context_create(BAM_IPC_LOG_PAGES, "bam_dmux",
-			0);
-	if (!bam_ipc_log_txt) {
-		pr_err("%s : unable to create IPC Logging Context", __func__);
-	}
 
 	rx_timer_interval = DEFAULT_POLLING_MIN_SLEEP;
 
