@@ -181,6 +181,39 @@ static __be16 rmnet_ip_type_trans(struct sk_buff *skb, struct net_device *dev)
 	return protocol;
 }
 
+/*
+ * FIXME: For some reason the modem send raw-ip packets even in ethernet mode.
+ * The qmi_wwan driver mentions a similar problem due to a "firmware bug",
+ * and uses code similar to the one below to generate an ethernet header
+ * in case of such weird packets.
+ */
+static __be16 rmnet_eth_type_trans(struct sk_buff *skb, struct net_device *dev)
+{
+	__be16 protocol = 0;
+
+	/* Determine L3 protocol */
+	switch (skb->data[0] & 0xf0) {
+	case 0x40:
+		protocol = htons(ETH_P_IP);
+		break;
+	case 0x60:
+		protocol = htons(ETH_P_IPV6);
+		break;
+	default:
+		/* Seems to be valid */
+		return eth_type_trans(skb, dev);
+	}
+
+	/* Generate a dummy ethernet header */
+	skb_push(skb, ETH_HLEN);
+	skb_reset_mac_header(skb);
+	eth_hdr(skb)->h_proto = protocol;
+	eth_zero_addr(eth_hdr(skb)->h_source);
+	memcpy(eth_hdr(skb)->h_dest, dev->dev_addr, ETH_ALEN);
+
+	return eth_type_trans(skb, dev);
+}
+
 static int count_this_packet(void *_hdr, int len)
 {
 	struct ethhdr *hdr = _hdr;
@@ -210,7 +243,7 @@ static void bam_recv_notify(void *dev, struct sk_buff *skb)
 			skb->protocol = rmnet_ip_type_trans(skb, dev);
 		} else {
 			/* Driver in Ethernet mode */
-			skb->protocol = eth_type_trans(skb, dev);
+			skb->protocol = rmnet_eth_type_trans(skb, dev);
 		}
 		if (RMNET_IS_MODE_IP(opmode) ||
 		    count_this_packet(skb->data, skb->len)) {
