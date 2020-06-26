@@ -1719,7 +1719,7 @@ void ieee80211_recalc_ps(struct ieee80211_local *local)
 
 		timeout = local->dynamic_ps_forced_timeout;
 		if (timeout < 0)
-			timeout = 100;
+			timeout = 1000;
 		local->hw.conf.dynamic_ps_timeout = timeout;
 
 		/* If the TIM IE is invalid, pretend the value is 1 */
