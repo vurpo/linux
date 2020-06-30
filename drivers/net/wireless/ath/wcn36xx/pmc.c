@@ -18,6 +18,26 @@
 
 #include "wcn36xx.h"
 
+static void wcn36xx_send_nullfunc(struct wcn36xx *wcn,
+				  struct ieee80211_vif *vif, bool powersave)
+{
+	struct sk_buff *skb;
+	struct ieee80211_hdr_3addr *nullfunc;
+
+	skb = ieee80211_nullfunc_get(wcn->hw, vif, true);
+	if (!skb)
+		return;
+
+	nullfunc = (struct ieee80211_hdr_3addr *) skb->data;
+	if (powersave)
+		nullfunc->frame_control |= cpu_to_le16(IEEE80211_FCTL_PM);
+
+	IEEE80211_SKB_CB(skb)->flags |= IEEE80211_TX_INTFL_DONT_ENCRYPT;
+
+	if (wcn36xx_start_tx(wcn, NULL, skb))
+		ieee80211_free_txskb(wcn->hw, skb);
+}
+
 int wcn36xx_pmc_enter_bmps_state(struct wcn36xx *wcn,
 				 struct ieee80211_vif *vif)
 {
@@ -29,6 +49,13 @@ int wcn36xx_pmc_enter_bmps_state(struct wcn36xx *wcn,
 		wcn36xx_dbg(WCN36XX_DBG_PMC, "Entered BMPS\n");
 		vif_priv->pw_state = WCN36XX_BMPS;
 		vif->driver_flags |= IEEE80211_VIF_BEACON_FILTER;
+
+		/* The firmware sends a standard null data packet with PS flag,
+		 * but some APs (TPLinks) does not seem to take it into account,
+		 * leading to disconnection or degraded throughput. Inform the
+		 * AP with a high priority (7) QoS null function in complement.
+		 */
+		wcn36xx_send_nullfunc(wcn, vif, true);
 	} else {
 		/*
 		 * One of the reasons why HW will not enter BMPS is because
