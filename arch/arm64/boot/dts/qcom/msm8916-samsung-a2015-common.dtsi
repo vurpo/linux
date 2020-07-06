@@ -250,6 +250,9 @@
 		sda-gpios = <&msmgpio 105 (GPIO_ACTIVE_HIGH|GPIO_OPEN_DRAIN)>;
 		scl-gpios = <&msmgpio 106 (GPIO_ACTIVE_HIGH|GPIO_OPEN_DRAIN)>;
 
+		pinctrl-names = "default";
+		pinctrl-0 = <&muic_i2c_default>;
+
 		#address-cells = <1>;
 		#size-cells = <0>;
 
@@ -431,6 +434,18 @@
 		};
 		pinconf {
 			pins = "gpio110";
+			drive-strength = <2>;
+			bias-disable;
+		};
+	};
+
+	muic_i2c_default: muic_i2c_default {
+		pinmux {
+			function = "gpio";
+			pins = "gpio105", "gpio106";
+		};
+		pinconf {
+			pins = "gpio105", "gpio106";
 			drive-strength = <2>;
 			bias-disable;
 		};
