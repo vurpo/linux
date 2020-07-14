@@ -243,7 +243,8 @@
 };
 
 &camss {
-	status = "ok";
+	status = "okay";
+
 	ports {
 		port@0 {
 			reg = <0>;
@@ -258,7 +259,7 @@
 };
 
 &cci {
-	status = "ok";
+	status = "okay";
 };
 
 &cci_i2c0 {
