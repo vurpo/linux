@@ -528,6 +528,16 @@
 				linux,code = <KEY_VOLUMEDOWN>;
 			};
 		};
+
+		bmc-bat@4000 {
+			compatible = "qcom,pm8916-bms-vm";
+			reg = <0x4000>;
+
+			qcom,bms-vm-s1-sample-interval = <100>;
+			qcom,bms-vm-s2-sample-interval = <100>;
+
+			monitored-battery = <&bat>;
+		};
 	};
 
 	pm8916@1 {
