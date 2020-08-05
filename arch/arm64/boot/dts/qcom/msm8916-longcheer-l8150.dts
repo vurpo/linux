@@ -223,7 +223,7 @@
 	bat: battery {
 		compatible = "simple-battery";
 		voltage-min-design-microvolt = <3400000>;
-		voltage-max-design-microvolt = <4300000>; /* marked 4.35 max */
+		voltage-max-design-microvolt = <4350000>;
 		energy-full-design-microwatt-hours = <9500000>;
 		charge-full-design-microamp-hours = <2500000>;
 
