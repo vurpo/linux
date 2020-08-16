@@ -68,6 +68,7 @@ static int pm8916_bms_vm_battery_get_property(struct power_supply *psy,
 		case POWER_SUPPLY_PROP_VOLTAGE_OCV:
 			ret = regmap_bulk_read(bat->regmap,
 				bat->reg + PM8916_BMS_VM_S3_S7_OCV_DATA0, &vbat, 2);
+			vbat *= 300;
 			break;
 
 		default:
@@ -114,7 +115,7 @@ static int pm8916_bms_vm_battery_get_property(struct power_supply *psy,
 		return 0;
 
 	case POWER_SUPPLY_PROP_VOLTAGE_OCV:
-		val->intval = bat->boot_ocv;
+		val->intval = vbat;
 		return 0;
 
 	case POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN:
