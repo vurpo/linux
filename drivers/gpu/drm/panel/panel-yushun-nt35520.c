@@ -359,7 +359,6 @@ static const struct drm_display_mode yushun_nt35520_mode = {
 	.vsync_start = 1280 + 20,
 	.vsync_end = 1280 + 20 + 4,
 	.vtotal = 1280 + 20 + 4 + 16,
-	.vrefresh = 60,
 	.width_mm = 62,
 	.height_mm = 111,
 };

@@ -165,7 +165,6 @@ static const struct drm_display_mode tianma_499_mode = {
 	.vsync_start = 1280 + 20,
 	.vsync_end = 1280 + 20 + 8,
 	.vtotal = 1280 + 20 + 8 + 20,
-	.vrefresh = 60,
 	.width_mm = 62,
 	.height_mm = 110,
 };

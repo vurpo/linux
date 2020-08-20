@@ -179,7 +179,6 @@ static const struct drm_display_mode s6e88a0_ams427ap24_mode = {
 	.vsync_start = 960 + 12,
 	.vsync_end = 960 + 12 + 1,
 	.vtotal = 960 + 12 + 1 + 3,
-	.vrefresh = 60,
 	.width_mm = 55,
 	.height_mm = 95,
 };

@@ -177,7 +177,6 @@ static const struct drm_display_mode ea8061v_ams497ee01_mode = {
 	.vsync_start = 1280 + 14,
 	.vsync_end = 1280 + 14 + 2,
 	.vtotal = 1280 + 14 + 2 + 8,
-	.vrefresh = 60,
 	.width_mm = 62,
 	.height_mm = 110,
 };

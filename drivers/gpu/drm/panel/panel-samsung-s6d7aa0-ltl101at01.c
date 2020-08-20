@@ -190,7 +190,6 @@ static const struct drm_display_mode s6d7aa0_ltl101at01_mode = {
 	.vsync_start = 1024 + 8,
 	.vsync_end = 1024 + 8 + 2,
 	.vtotal = 1024 + 8 + 2 + 6,
-	.vrefresh = 60,
 	.width_mm = 148,
 	.height_mm = 197,
 };

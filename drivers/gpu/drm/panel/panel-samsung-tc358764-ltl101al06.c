@@ -172,7 +172,6 @@ static const struct drm_display_mode tc358764_ltl101al06_mode = {
 	.vsync_start = 800 + 32,
 	.vsync_end = 800 + 32 + 6,
 	.vtotal = 800 + 32 + 6 + 64,
-	.vrefresh = 60,
 	.width_mm = 228,
 	.height_mm = 149,
 };
