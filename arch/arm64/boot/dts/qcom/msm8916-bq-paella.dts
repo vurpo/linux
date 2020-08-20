@@ -254,7 +254,7 @@
 		"AMIC1", "MIC BIAS External1",
 		"AMIC2", "MIC BIAS Internal2",
 		"AMIC3", "MIC BIAS External1";
-	qcom,aux-devs = <&speaker_amp>;
+	aux-devs = <&speaker_amp>;
 
 	internal-codec-playback-dai-link@0 {
 		link-name = "WCD";
