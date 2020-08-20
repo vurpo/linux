@@ -232,12 +232,11 @@ static int msm8916_qdsp6_platform_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	card->dev = dev;
-	ret = qcom_snd_parse_of(card);
-	if (ret) {
-		dev_err(&pdev->dev, "Error parsing device tree: %d\n", ret);
-		return ret;
-	}
+	card->owner = THIS_MODULE;
 	card->components = "qdsp6";
+	ret = qcom_snd_parse_of(card);
+	if (ret)
+		return ret;
 
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "mic-iomux");
 	data->mic_iomux = devm_ioremap_resource(dev, res);
