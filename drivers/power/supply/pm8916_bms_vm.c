@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
 
-
 #include <linux/errno.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -16,6 +15,11 @@
 #define PM8916_PERPH_TYPE 0x04
 #define PM8916_BMS_VM_TYPE 0x020D
 
+#define PM8916_BMS_VM_STATUS1 0x08
+#define PM8916_BMS_VM_FSM_STATE(x) ((x & 0b00111000) >> 3)
+#define PM8916_BMS_VM_FSM_STATE_S2 0x2
+
+
 #define PM8916_BMS_VM_EN_CTL 0x46
 #define PM8916_BMS_ENABLED BIT(7)
 
@@ -25,6 +29,9 @@
 #define PM8916_BMS_VM_S3_S7_OCV_DATA0 0x6A
 #define PM8916_BMS_VM_BMS_FIFO_REG_0_LSB 0xC0
 
+// NOTE: downstream has a comment saying that using 1 fifo is broken in hardware
+#define PM8916_BMS_VM_FIFO_COUNT 2 // 2 .. 8
+
 struct pm8916_bms_vm_battery {
 	struct device *dev;
 	struct power_supply_desc desc;
@@ -33,6 +40,8 @@ struct pm8916_bms_vm_battery {
 	struct regmap *regmap;
 	unsigned int reg;
 	unsigned int boot_ocv;
+	unsigned int fake_ocv;
+	unsigned int vbat_now;
 };
 
 
@@ -48,9 +57,6 @@ static int pm8916_bms_vm_battery_get_property(struct power_supply *psy,
 
 	switch (psp) {
 		case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-		case POWER_SUPPLY_PROP_VOLTAGE_AVG:
-		case POWER_SUPPLY_PROP_HEALTH:
-		case POWER_SUPPLY_PROP_CAPACITY:
 			ret = regmap_bulk_read(bat->regmap,
 				bat->reg + PM8916_BMS_VM_BMS_FIFO_REG_0_LSB, &tmp, 2);
 
@@ -65,12 +71,6 @@ static int pm8916_bms_vm_battery_get_property(struct power_supply *psy,
 				vbat = tmp - 100000; // FIXME Offset needs explaination
 			break;
 
-		case POWER_SUPPLY_PROP_VOLTAGE_OCV:
-			ret = regmap_bulk_read(bat->regmap,
-				bat->reg + PM8916_BMS_VM_S3_S7_OCV_DATA0, &vbat, 2);
-			vbat *= 300;
-			break;
-
 		default:
 			break;
 	}
@@ -83,51 +83,57 @@ static int pm8916_bms_vm_battery_get_property(struct power_supply *psy,
 
 			if (supplied < 0)
 				return supplied;
-			else if (supplied)
-				val->intval = POWER_SUPPLY_STATUS_CHARGING;
+			else if (supplied) {
+				ret = regmap_write(bat->regmap, bat->reg + PM8916_BMS_VM_STATUS1, 0);
+				ret = regmap_read(bat->regmap, bat->reg + PM8916_BMS_VM_STATUS1, &tmp);
+
+				if (PM8916_BMS_VM_FSM_STATE(tmp) == PM8916_BMS_VM_FSM_STATE_S2)
+					val->intval = POWER_SUPPLY_STATUS_FULL;
+				else
+					val->intval = POWER_SUPPLY_STATUS_CHARGING;
+			}
 			else
 				val->intval = POWER_SUPPLY_STATUS_DISCHARGING;
 
 			return 0;
 
-	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
-	case POWER_SUPPLY_PROP_VOLTAGE_AVG:
-		val->intval = vbat;
+		case POWER_SUPPLY_PROP_HEALTH:
+			if (bat->vbat_now < info->voltage_min_design_uv)
+				val->intval = POWER_SUPPLY_HEALTH_DEAD;
+			else if (bat->vbat_now > info->voltage_max_design_uv)
+				val->intval = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
+			else
+				val->intval = POWER_SUPPLY_HEALTH_GOOD;
+			return 0;
 
-		return 0;
+		case POWER_SUPPLY_PROP_CAPACITY:
+			val->intval = power_supply_batinfo_ocv2cap(info, bat->fake_ocv, 20);
 
-	case POWER_SUPPLY_PROP_HEALTH:
-		if (vbat < info->voltage_min_design_uv)
-			val->intval = POWER_SUPPLY_HEALTH_DEAD;
-		else if (vbat > info->voltage_max_design_uv)
-			val->intval = POWER_SUPPLY_HEALTH_OVERVOLTAGE;
-		else
-			val->intval = POWER_SUPPLY_HEALTH_GOOD;
-		return 0;
+			return 0;
 
-	case POWER_SUPPLY_PROP_CAPACITY:
-		val->intval = power_supply_batinfo_ocv2cap(info, vbat, 20);
+		case POWER_SUPPLY_PROP_VOLTAGE_NOW:
+			val->intval = bat->vbat_now;
 
-		return 0;
+			return 0;
 
-	case POWER_SUPPLY_PROP_VOLTAGE_BOOT:
-		val->intval = bat->boot_ocv;
-		return 0;
+		case POWER_SUPPLY_PROP_VOLTAGE_BOOT:
+			val->intval = bat->boot_ocv;
+			return 0;
 
-	case POWER_SUPPLY_PROP_VOLTAGE_OCV:
-		val->intval = vbat;
-		return 0;
+		case POWER_SUPPLY_PROP_VOLTAGE_OCV:
+			val->intval = bat->fake_ocv;
+			return 0;
 
-	case POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN:
-		val->intval = info->voltage_min_design_uv;
-		return 0;
+		case POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN:
+			val->intval = info->voltage_min_design_uv;
+			return 0;
 
-	case POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN:
-		val->intval = info->voltage_max_design_uv;
-		return 0;
+		case POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN:
+			val->intval = info->voltage_max_design_uv;
+			return 0;
 
-	default:
-		return -EINVAL;
+		default:
+			return -EINVAL;
 	};
 }
 
@@ -136,12 +142,53 @@ static enum power_supply_property pm8916_bms_vm_battery_properties[] = {
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
 	POWER_SUPPLY_PROP_VOLTAGE_MIN_DESIGN,
-	POWER_SUPPLY_PROP_VOLTAGE_AVG,
 	POWER_SUPPLY_PROP_VOLTAGE_BOOT,
 	POWER_SUPPLY_PROP_VOLTAGE_OCV,
 	POWER_SUPPLY_PROP_HEALTH,
 	POWER_SUPPLY_PROP_CAPACITY,
 };
+
+static irqreturn_t pm8916_bms_vm_fifo_update_done_irq(int irq, void *data)
+{
+	struct pm8916_bms_vm_battery *bat = data;
+	//struct power_supply_battery_info *info = &bat->info;
+	int i, delta;
+	unsigned int tmp = 0;
+	int supplied;
+
+	// FIXME Yes, this is bad
+	// Should probably just bulk_read into array of u16 and schedule work
+	// This will also help with automatic "recalibration" when bat is charged
+
+	dev_warn(bat->dev, " ** Interrupt **\n");
+
+	supplied = power_supply_is_system_supplied();
+	if (supplied < 0)
+		return IRQ_HANDLED;
+
+	for (i = 0; i < PM8916_BMS_VM_FIFO_COUNT; i++) {
+		tmp = 0;
+
+		regmap_bulk_read(bat->regmap,
+				bat->reg + PM8916_BMS_VM_BMS_FIFO_REG_0_LSB + i * 2, &tmp, 2);
+
+		tmp = tmp * 300 - 100000;
+
+		delta = tmp - bat->vbat_now;
+
+		if ((supplied && delta > 0) || (!supplied && delta < 0))
+			if (abs(delta) < 25000) // 0.025v
+				bat->fake_ocv += delta;
+
+		dev_warn(bat->dev, "  %d) %07u (d = %07d) [%s]\n", i, tmp, delta, (supplied ? "S" : "n"));
+
+		bat->vbat_now = tmp;
+	}
+
+	power_supply_changed(bat->battery);
+
+	return IRQ_HANDLED;
+}
 
 static int pm8916_bms_vm_battery_probe_dt(struct pm8916_bms_vm_battery *bat)
 {
@@ -161,20 +208,16 @@ static int pm8916_bms_vm_battery_probe_dt(struct pm8916_bms_vm_battery *bat)
 	ret = regmap_write(bat->regmap,
 			   bat->reg + PM8916_BMS_VM_S2_SAMPLE_INTERVAL_CTL, tmp);
 
-	/*
-	 * NOTE: We configure BMS to fill 2 FIFO bufers since it looks like
-	 * hardware ignores last buffer. At least downstream driver has note
-	 * that using only 1 buffer is broken in hardware.
-	 */
+
 	ret = regmap_write(bat->regmap, bat->reg + PM8916_BMS_VM_FIFO_LENGTH_CTL,
-			   0x02 << 4 | 0x02);
+			   PM8916_BMS_VM_FIFO_COUNT << 4 | PM8916_BMS_VM_FIFO_COUNT);
 
 	ret = regmap_write(bat->regmap,
 			   bat->reg + PM8916_BMS_VM_EN_CTL, PM8916_BMS_ENABLED);
 
 	ret = regmap_bulk_read(bat->regmap,
 			       bat->reg + PM8916_BMS_VM_S3_S7_OCV_DATA0, &tmp, 2);
-	bat->boot_ocv = tmp * 300;
+	bat->boot_ocv = bat->fake_ocv = bat->vbat_now = tmp * 300;
 
 
 	return ret;
@@ -187,7 +230,7 @@ static int pm8916_bms_vm_battery_probe(struct platform_device *pdev)
 	struct pm8916_bms_vm_battery *bat;
 	struct power_supply_config psy_cfg = {};
 	struct power_supply_desc *desc;
-	int ret;
+	int ret, irq;
 	unsigned int tmp;
 
 	bat = devm_kzalloc(dev, sizeof(*bat), GFP_KERNEL);
@@ -201,6 +244,17 @@ static int pm8916_bms_vm_battery_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 	of_property_read_u32(dev->of_node, "reg", &bat->reg);
+
+	irq = platform_get_irq(pdev, 0);
+	if (irq > 0) {
+		ret = devm_request_irq(dev, irq, pm8916_bms_vm_fifo_update_done_irq,
+				       0, "pm8916_vm_bms", bat);
+		if (ret)
+			return ret;
+	} else {
+		if (irq == -EPROBE_DEFER)
+			return -EPROBE_DEFER;
+	}
 
 	ret = regmap_bulk_read(bat->regmap, bat->reg + PM8916_PERPH_TYPE, &tmp, 2); // FIXME
 	if (ret)  {
