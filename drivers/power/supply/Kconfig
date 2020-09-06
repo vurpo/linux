@@ -157,6 +157,17 @@ config BATTERY_DS2782
 	help
 	  Say Y here to enable support for the DS2782/DS2786 standalone battery
 	  gas-gauge.
+          
+config FAN5404X_CHARGER
+	tristate "FAN540XX Battery Charger"
+	depends on I2C
+	help
+	  Say Y to include support for FAN540XX Battery Charger.
+	  FAN5404X family of devices are I2C controlled 1.55A USB-compliant
+	  switch-mode chargers with power path and USB OTG boost operation.
+	  The driver supports charger enable/disable.
+	  The driver reports the charger status via the power supply framework.
+	  A charger status change triggers an IRQ via the device STAT pin.
 
 config BATTERY_LEGO_EV3
 	tristate "LEGO MINDSTORMS EV3 battery"
