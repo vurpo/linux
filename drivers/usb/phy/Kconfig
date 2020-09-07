@@ -192,4 +192,7 @@ config JZ4770_PHY
 	  This driver provides PHY support for the USB controller found
 	  on the JZ4770 SoC from Ingenic.
 
+config USB_MSM_OTG
+	tristate "MSM USB Transceiver Driver"
+
 endmenu

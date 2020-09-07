@@ -223,9 +223,7 @@ struct fan5404x_chg {
 	struct power_supply *usb_psy;
 	struct power_supply batt_psy;
 	struct power_supply *bms_psy;
-	struct power_supply_desc *usb_psy_desc;
 	struct power_supply_desc batt_psy_desc;
-	struct power_supply_desc *bms_psy_desc;
 	const char *bms_psy_name;
 
 	bool test_mode;
@@ -665,7 +663,7 @@ static int start_charging(struct fan5404x_chg *chip)
 	dev_dbg(chip->dev, "starting to charge...\n");
 
 	if (chip->factory_mode) {
-		rc = chip->usb_psy_desc->get_property(chip->usb_psy,
+		rc = chip->usb_psy->desc->get_property(chip->usb_psy,
 				 POWER_SUPPLY_PROP_TYPE, &prop);
 		dev_dbg(chip->dev, "External Power Changed: usb=%d\n",
 			prop.intval);
@@ -683,7 +681,7 @@ static int start_charging(struct fan5404x_chg *chip)
 		return rc;
 	}
 
-	rc = chip->usb_psy_desc->get_property(chip->usb_psy,
+	rc = chip->usb_psy->desc->get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_CURRENT_MAX, &prop);
 	if (rc < 0) {
 		dev_err(chip->dev,
@@ -834,7 +832,7 @@ static void fan5404x_external_power_changed(struct power_supply *psy)
 		chip->bms_psy = power_supply_get_by_name(
 					(char *)chip->bms_psy_name);
 
-	rc = chip->usb_psy_desc->get_property(chip->usb_psy,
+	rc = chip->usb_psy->desc->get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_PRESENT, &prop);
 	pr_debug("External Power Changed: usb=%d\n", prop.intval);
 
@@ -850,7 +848,7 @@ static void fan5404x_external_power_changed(struct power_supply *psy)
 
 	if (chip->factory_mode && chip->usb_psy && chip->factory_present
 						&& !factory_kill_disable) {
-		rc = chip->usb_psy_desc->get_property(chip->usb_psy,
+		rc = chip->usb_psy->desc->get_property(chip->usb_psy,
 			POWER_SUPPLY_PROP_ONLINE, &prop);
 		if (!rc && (prop.intval == 0) && !chip->usb_present /*&&
 					!reboot_in_progress()*/) {
@@ -1009,7 +1007,7 @@ static int fan5404x_get_prop_batt_capacity(struct fan5404x_chg *chip)
 	}
 
 	if (chip->bms_psy) {
-		rc = chip->bms_psy_desc->get_property(chip->bms_psy,
+		rc = chip->bms_psy->desc->get_property(chip->bms_psy,
 				POWER_SUPPLY_PROP_CAPACITY, &ret);
 		if (rc)
 			dev_err(chip->dev, "Couldn't get batt capacity\n");
@@ -1045,7 +1043,7 @@ static int fan5404x_get_prop_batt_voltage_now(struct fan5404x_chg *chip,
 			power_supply_get_by_name((char *)chip->bms_psy_name);
 
 	if (chip->bms_psy) {
-		rc = chip->bms_psy_desc->get_property(chip->bms_psy,
+		rc = chip->bms_psy->desc->get_property(chip->bms_psy,
 				POWER_SUPPLY_PROP_VOLTAGE_NOW, &ret);
 		if (rc < 0) {
 			dev_err(chip->dev, "Couldn't get batt voltage\n");
@@ -1071,7 +1069,7 @@ static bool fan5404x_get_prop_taper_reached(struct fan5404x_chg *chip)
 			power_supply_get_by_name((char *)chip->bms_psy_name);
 
 	if (chip->bms_psy) {
-		rc = chip->bms_psy_desc->get_property(chip->bms_psy,
+		rc = chip->bms_psy->desc->get_property(chip->bms_psy,
 					 POWER_SUPPLY_PROP_TAPER_REACHED, &ret);
 		if (rc < 0) {
 			dev_err(chip->dev,
@@ -1394,7 +1392,7 @@ static int fan5404x_bms_get_property(struct fan5404x_chg *chip,
 			power_supply_get_by_name((char *)chip->bms_psy_name);
 
 	if (chip->bms_psy) {
-		chip->bms_psy_desc->get_property(chip->bms_psy,
+		chip->bms_psy->desc->get_property(chip->bms_psy,
 				prop, &ret);
 		return ret.intval;
 	}
@@ -1645,7 +1643,7 @@ static int determine_initial_status(struct fan5404x_chg *chip)
 		}
 	}
 
-	rc = chip->usb_psy_desc->get_property(chip->usb_psy,
+	rc = chip->usb_psy->desc->get_property(chip->usb_psy,
 				POWER_SUPPLY_PROP_PRESENT, &prop);
 	if (rc < 0) {
 		dev_err(chip->dev, "Couldn't get USB present rc = %d\n", rc);
@@ -2421,6 +2419,7 @@ static int fan5404x_charger_probe(struct i2c_client *client,
 	INIT_DELAYED_WORK(&chip->iusb_work,
 					iusb_work);
 
+	chip->batt_psy.desc = &chip->batt_psy_desc;
 	chip->batt_psy_desc.name = "battery";
 	chip->batt_psy_desc.type = POWER_SUPPLY_TYPE_BATTERY;
 	chip->batt_psy_desc.get_property = fan5404x_batt_get_property;
@@ -2607,7 +2606,7 @@ static int fan5404x_charger_probe(struct i2c_client *client,
 		pr_err("failed to set up voltage notifications: %d\n", rc);
 
 	if (chip->bms_psy) {
-		rc = chip->bms_psy_desc->get_property(chip->bms_psy,
+		rc = chip->bms_psy->desc->get_property(chip->bms_psy,
 				POWER_SUPPLY_PROP_HEALTH, &ret);
 		if (rc)
 			dev_err(chip->dev, "Couldn't get batt health\n");
